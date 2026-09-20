@@ -30,22 +30,20 @@ from the moment it's created — a deliberate, documented engineering trade-off 
 time-boxed hackathon, not an oversight.
 
 ## Prerequisites (Day 1 — do this first)
-1. Sign up at AWS Builder Center (free, no card): https://builder.aws.com
-2. Create an AWS account if you don't have one: https://aws.amazon.com/free
-3. Install AWS CLI: `pip install awscli --break-system-packages` (or use the official installer)
-4. Install AWS SAM CLI (makes deploying Lambda+API Gateway+DynamoDB one command):
+1. Create an AWS account if you don't have one: https://aws.amazon.com/free
+2. Install AWS CLI: `pip install awscli --break-system-packages` (or use the official installer)
+3. Install AWS SAM CLI (makes deploying Lambda+API Gateway+DynamoDB one command):
    https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html
-5. Configure your CLI: `aws configure` (paste your Access Key + Secret Key + region `us-east-1`)
-6. **Enable Bedrock model access**: AWS Console → Bedrock → Model access → Request access to
-   `Anthropic Claude 3.5 Sonnet` (has vision). Takes a few minutes to approve, do this FIRST.
+4. Configure your CLI: `aws configure` (paste your Access Key + Secret Key + region `us-east-1`)
+5. No AI/ML service setup needed — OCR runs client-side via Tesseract.js, loaded automatically from a CDN in `frontend/index.html`
 
 ## What's in this folder
 - `template.yaml` — SAM template: defines your S3 bucket, DynamoDB tables, Lambdas, and API Gateway in one file
-- `lambda/verify_medicine.py` — takes an uploaded photo, calls Bedrock to extract drug name/expiry, marks it `pending_review` if valid
+- `lambda/verify_medicine.py` — receives OCR-extracted text from the browser, parses drug name/expiry with pure Python, marks it `pending_review` if valid
 - `lambda/custodian.py` — lets a custodian (NGO/hospital) list pending listings and approve them, flipping status to `available`
 - `lambda/match_engine.py` — matches an approved listing to an open need request by drug + location, and confirms handoffs
-- `lambda/safety_check.py` — calls Bedrock again to flag whether a match is safe for the requester's stated condition/age
-- `frontend/index.html` — bare-bones upload + browse UI, no build tools needed
+- `lambda/safety_check.py` — rule-based logic that flags whether a match may need pharmacist review, based on age/condition
+- `frontend/index.html` — upload + custodian dashboard + matching UI, with Tesseract.js loaded from CDN for client-side OCR
 
 ## Day 1: Deploy the skeleton
 ```bash
@@ -77,6 +75,7 @@ SMS Hospital Jaipur precedent explicitly — it shows judges you designed around
 real-world constraint instead of ignoring it.
 
 ## Common beginner issues
-- **Bedrock "AccessDenied"**: you forgot to request model access in the console, or you're in the wrong region — Bedrock isn't available in every region, stick to `us-east-1`
-- **Lambda timeout**: Bedrock calls can take a few seconds — set Lambda timeout to at least 30s in `template.yaml`
+- **OCR reads garbled text**: use a clear, well-lit, front-facing photo — Tesseract.js struggles with angled, blurry, or stylized images
+- **Lambda timeout**: increase Lambda timeout in `template.yaml` if OCR text parsing takes longer than expected on large inputs
 - **CORS errors in browser**: make sure API Gateway has CORS enabled (already configured in `template.yaml`)
+- **"Failed to fetch" errors**: run the frontend through a local server (e.g. VS Code's Live Server extension) rather than opening `index.html` directly as a `file://` URL — some browser security restrictions block Tesseract.js's worker scripts under `file://`
