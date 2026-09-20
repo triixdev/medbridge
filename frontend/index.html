@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>MedBridge</title>
+<style>
+  body { font-family: -apple-system, sans-serif; max-width: 520px; margin: 40px auto; padding: 0 16px; color: #1a1a1a; }
+  h1 { font-size: 1.4rem; }
+  section { margin-bottom: 32px; padding: 16px; border: 1px solid #ddd; border-radius: 8px; }
+  input, select, button { display: block; width: 100%; margin: 8px 0; padding: 8px; font-size: 1rem; box-sizing: border-box; }
+  button { background: #1a7f37; color: white; border: none; border-radius: 6px; cursor: pointer; }
+  button:disabled { background: #999; cursor: not-allowed; }
+  pre { background: #f6f6f6; padding: 12px; border-radius: 6px; white-space: pre-wrap; font-size: 0.85rem; }
+  .loading { color: #666; font-style: italic; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.8rem; font-weight: 600; margin-left: 6px; }
+  .badge-pending_review { background: #fff3cd; color: #856404; }
+  .badge-available { background: #d4edda; color: #155724; }
+  .badge-matched, .badge-completed { background: #cce5ff; color: #004085; }
+  .pending-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #eee; }
+  .pending-item button { width: auto; margin: 0; padding: 4px 12px; font-size: 0.85rem; }
+  .flag-safe { color: #1a7f37; font-weight: 600; }
+  .flag-check_with_pharmacist { color: #b08800; font-weight: 600; }
+  .flag-not_recommended { color: #c1121f; font-weight: 600; }
+</style>
+</head>
+<body>
+  <h1>MedBridge 🩺</h1>
+  <p>Custodian-mediated medicine redistribution. Every handoff goes through a verified NGO/hospital.</p>
+
+  <section>
+    <h2>1. Donate a medicine</h2>
+    <input type="file" id="photoInput" accept="image/*">
+    <input type="text" id="custodianId" placeholder="Custodian ID (e.g. ngo-001)" value="ngo-001">
+    <input type="text" id="donorLocation" placeholder="Location (e.g. Kolkata)" value="Kolkata">
+    <button id="uploadBtn" onclick="uploadMedicine()">Verify & List Medicine</button>
+    <div id="uploadStatus"></div>
+    <pre id="uploadResult"></pre>
+  </section>
+
+  <section>
+    <h2>2. Custodian Dashboard — approve pending listings</h2>
+    <input type="text" id="dashCustodianId" placeholder="Custodian ID" value="ngo-001">
+    <button onclick="loadPending()">Refresh Pending Listings</button>
+    <div id="pendingList"></div>
+  </section>
+
+  <section>
+    <h2>3. Post a need</h2>
+    <input type="text" id="reqDrugName" placeholder="Drug name needed">
+    <input type="number" id="reqAge" placeholder="Age">
+    <input type="text" id="reqCondition" placeholder="Condition / reason">
+    <input type="text" id="reqLocation" placeholder="Location (e.g. Kolkata)" value="Kolkata">
+    <input type="text" id="reqCustodian" placeholder="Custodian ID" value="ngo-001">
+    <button onclick="createRequest()">Post Request</button>
+    <pre id="requestResult"></pre>
+  </section>
+
+  <section>
+    <h2>4. Find matches + safety check + confirm handoff</h2>
+    <input type="text" id="listingIdInput" placeholder="Approved Listing ID">
+    <button onclick="findMatches()">Find Matches</button>
+    <div id="matchStatus"></div>
+    <pre id="matchResult"></pre>
+    <div id="confirmSection"></div>
+  </section>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.0.4/tesseract.min.js"></script>
+<script>
+  // Paste your API Gateway URL here after `sam deploy` — looks like:
+  // https://abc123.execute-api.us-east-1.amazonaws.com/Prod
+  const API_URL = "https://b3dhjndjb9.execute-api.us-east-1.amazonaws.com/Prod";
+
+  function toBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result.split(",")[1]);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function badge(status) {
+    return `<span class="badge badge-${status}">${status.replace('_', ' ')}</span>`;
+  }
+
+  async function uploadMedicine() {
+    const file = document.getElementById("photoInput").files[0];
+    if (!file) { alert("Choose a photo first"); return; }
+    const btn = document.getElementById("uploadBtn");
+    const statusEl = document.getElementById("uploadStatus");
+    btn.disabled = true;
+    statusEl.innerHTML = '<span class="loading">Reading label text (OCR running in your browser)…</span>';
+
+    try {
+      const { data: { text } } = await Tesseract.recognize(file, 'eng');
+
+      statusEl.innerHTML = '<span class="loading">Verifying extracted text…</span>';
+
+      const res = await fetch(`${API_URL}/verify`, {
+        method: "POST",
+        body: JSON.stringify({
+          extracted_text: text,
+          custodian_id: document.getElementById("custodianId").value,
+          location: document.getElementById("donorLocation").value
+        })
+      });
+      const data = await res.json();
+      statusEl.innerHTML = data.status ? `Status: ${badge(data.status === "verified" ? "pending_review" : data.status)}` : "";
+      document.getElementById("uploadResult").textContent = JSON.stringify(data, null, 2);
+    } catch (e) {
+      statusEl.innerHTML = `<span style="color:red">Error: ${e}</span>`;
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function loadPending() {
+    const custodianId = document.getElementById("dashCustodianId").value;
+    const listEl = document.getElementById("pendingList");
+    listEl.innerHTML = '<span class="loading">Loading…</span>';
+
+    const res = await fetch(`${API_URL}/custodian`, {
+      method: "POST",
+      body: JSON.stringify({ action: "pending", custodian_id: custodianId })
+    });
+    const data = await res.json();
+    const pending = data.pending || [];
+
+    if (pending.length === 0) {
+      listEl.innerHTML = "<p>No pending listings.</p>";
+      return;
+    }
+
+    listEl.innerHTML = pending.map(item => `
+      <div class="pending-item">
+        <span>${item.drugName} (${item.location}) — listing ${item.listingId.slice(0,8)}...</span>
+        <button onclick="approveListing('${item.listingId}')">Approve</button>
+      </div>
+    `).join("");
+  }
+
+  async function approveListing(listingId) {
+    await fetch(`${API_URL}/custodian`, {
+      method: "POST",
+      body: JSON.stringify({ action: "approve", listingId })
+    });
+    loadPending();
+  }
+
+  async function createRequest() {
+    const res = await fetch(`${API_URL}/match`, {
+      method: "POST",
+      body: JSON.stringify({
+        action: "create_request",
+        requestId: "req-" + Date.now(),
+        drug_name: document.getElementById("reqDrugName").value,
+        age: document.getElementById("reqAge").value,
+        condition: document.getElementById("reqCondition").value,
+        location: document.getElementById("reqLocation").value,
+        custodian_id: document.getElementById("reqCustodian").value
+      })
+    });
+    const data = await res.json();
+    document.getElementById("requestResult").textContent = JSON.stringify(data, null, 2);
+  }
+
+  async function findMatches() {
+    const listingId = document.getElementById("listingIdInput").value;
+    const statusEl = document.getElementById("matchStatus");
+    const confirmEl = document.getElementById("confirmSection");
+    confirmEl.innerHTML = "";
+    statusEl.innerHTML = '<span class="loading">Searching for matches…</span>';
+
+    const res = await fetch(`${API_URL}/match`, {
+      method: "POST",
+      body: JSON.stringify({ action: "find_matches", listingId })
+    });
+    const data = await res.json();
+    let output = JSON.stringify(data, null, 2);
+
+    if (data.matches && data.matches.length > 0) {
+      const match = data.matches[0];
+      statusEl.innerHTML = '<span class="loading">Running safety check…</span>';
+
+      const safetyRes = await fetch(`${API_URL}/safety-check`, {
+        method: "POST",
+        body: JSON.stringify({
+          drug_name: data.listing.drugName,
+          age: match.age,
+          condition: match.condition
+        })
+      });
+      const safety = await safetyRes.json();
+      output += `\n\n--- Safety Check ---\n` + JSON.stringify(safety, null, 2);
+      statusEl.innerHTML = `Safety flag: <span class="flag-${safety.flag_level}">${safety.flag_level}</span>`;
+
+      confirmEl.innerHTML = `<button onclick="confirmHandoff('${listingId}','${match.requestId}')">Confirm Handoff</button>`;
+    } else {
+      statusEl.innerHTML = "No open matches found yet.";
+    }
+
+    document.getElementById("matchResult").textContent = output;
+  }
+
+  async function confirmHandoff(listingId, requestId) {
+    const res = await fetch(`${API_URL}/match`, {
+      method: "POST",
+      body: JSON.stringify({ action: "confirm", listingId, requestId })
+    });
+    const data = await res.json();
+    document.getElementById("confirmSection").innerHTML = `<p>${badge("completed")} Handoff confirmed!</p>`;
+  }
+</script>
+</body>
+</html>

@@ -1,0 +1,116 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: MedBridge - custodian-mediated medicine redistribution
+
+Globals:
+  Function:
+    Timeout: 30
+    Runtime: python3.12
+    MemorySize: 256
+
+Resources:
+
+  MedicinePhotosBucket:
+    Type: AWS::S3::Bucket
+
+  MedicineListingsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: MedicineListings
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: listingId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: listingId
+          KeyType: HASH
+
+  NeedRequestsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: NeedRequests
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: requestId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: requestId
+          KeyType: HASH
+
+  VerifyMedicineFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/
+      Handler: verify_medicine.handler
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref MedicinePhotosBucket
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MedicineListingsTable
+      Environment:
+        Variables:
+          LISTINGS_TABLE: !Ref MedicineListingsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            Path: /verify
+            Method: post
+
+  MatchEngineFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/
+      Handler: match_engine.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MedicineListingsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref NeedRequestsTable
+      Environment:
+        Variables:
+          LISTINGS_TABLE: !Ref MedicineListingsTable
+          REQUESTS_TABLE: !Ref NeedRequestsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            Path: /match
+            Method: post
+
+  CustodianFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/
+      Handler: custodian.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MedicineListingsTable
+      Environment:
+        Variables:
+          LISTINGS_TABLE: !Ref MedicineListingsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            Path: /custodian
+            Method: post
+
+  SafetyCheckFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/
+      Handler: safety_check.handler
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            Path: /safety-check
+            Method: post
+
+Outputs:
+  ApiUrl:
+    Description: API Gateway base URL
+    Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/'
+  BucketName:
+    Value: !Ref MedicinePhotosBucket
